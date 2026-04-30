@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>hizliyim.com - Premium Access Portal</title>
+    
+    <link rel="icon" type="image/png" href="sonlogo.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyCP0Rd8CAfzYRPtakfdQWBqS5uBn045XpE",
+            authDomain: "hizliyimforum.firebaseapp.com",
+            databaseURL: "https://hizliyimforum-default-rtdb.firebaseio.com",
+            projectId: "hizliyimforum",
+            storageBucket: "hizliyimforum.firebasestorage.app",
+            messagingSenderId: "903963422468",
+            appId: "1:903963422468:web:936c368393585efd0cea51"
+        };
+
+        let db, auth, currentUserEmail;
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch (e) { console.error("Sistem hatası:", e); }
+
+        // --- STATUS SYSTEM ---
+        function showStatus(message, type = 'info') {
+            const statusBox = document.getElementById('custom-status');
+            const statusText = document.getElementById('status-message');
+            
+            statusBox.className = `fixed top-10 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-[2rem] backdrop-blur-3xl border transition-all duration-1000 flex items-center gap-4 shadow-2xl `;
+            
+            if (type === 'error') statusBox.classList.add('bg-red-500/20', 'border-red-500/30', 'text-red-100');
+            else if (type === 'success') statusBox.classList.add('bg-[#027aff]/30', 'border-[#027aff]/40', 'text-white');
+            else statusBox.classList.add('bg-white/10', 'border-white/20', 'text-white');
+
+            statusText.textContent = message;
+            statusBox.classList.remove('hidden', 'opacity-0', '-translate-y-10');
+            
+            setTimeout(() => {
+                statusBox.classList.add('opacity-0', '-translate-y-10');
+                setTimeout(() => statusBox.classList.add('hidden'), 1000);
+            }, 4000);
+        }
+
+        // --- PASSKEY HANDLERS ---
+        async function registerPasskey() {
+            if (!currentUserEmail) return showStatus("Oturum bulunamadı.", "error");
+            try {
+                const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+                const options = {
+                    publicKey: {
+                        challenge,
+                        rp: { name: "hizliyim.com", id: window.location.hostname },
+                        user: {
+                            id: Uint8Array.from(currentUserEmail, c => c.charCodeAt(0)),
+                            name: currentUserEmail,
+                            displayName: currentUserEmail
+                        },
+                        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+                        authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+                        timeout: 60000
+                    }
+                };
+                const credential = await navigator.credentials.create(options);
+                if (credential) {
+                    await updateDoc(doc(db, "users", currentUserEmail.toLowerCase()), { hasPasskey: true });
+                    showStatus("Biyometrik erişim tanımlandı.", "success");
+                }
+            } catch (err) { showStatus("İşlem reddedildi.", "error"); }
+        }
+
+        async function handlePasskeyLogin() {
+            try {
+                const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+                const credential = await navigator.credentials.get({
+                    publicKey: { challenge, timeout: 60000, userVerification: "required" },
+                    mediation: "required" 
+                });
+                if (credential) {
+                    showStatus("Doğrulama başarılı.", "success");
+                    window.location.hash = '#/home';
+                }
+            } catch (err) { showStatus("Giriş başarısız.", "error"); }
+        }
+
+        // --- SEQUENTIAL ROUTER ---
+        const router = {
+            isTransitioning: false,
+            routes: { '#/login': 'login', '#/register': 'register', '#/home': 'home' },
+            load: async () => {
+                if (router.isTransitioning) return;
+                router.isTransitioning = true;
+
+                const hash = window.location.hash || '#/login';
+                const targetId = `page-${router.routes[hash] || 'login'}`;
+                const currentPage = document.querySelector('.page-content:not(.hidden)');
+                const targetPage = document.getElementById(targetId);
+
+                if (currentPage && currentPage.id !== targetId) {
+                    currentPage.style.opacity = '0';
+                    currentPage.style.transform = 'scale(1.01) translateY(-10px)';
+                    currentPage.style.filter = 'blur(10px)';
+                    await new Promise(r => setTimeout(r, 800));
+                    currentPage.classList.add('hidden');
+                }
+
+                if (targetPage) {
+                    targetPage.classList.remove('hidden');
+                    targetPage.style.opacity = '0';
+                    targetPage.style.transform = 'scale(0.99) translateY(10px)';
+                    targetPage.style.filter = 'blur(10px)';
+                    void targetPage.offsetWidth;
+                    targetPage.style.opacity = '1';
+                    targetPage.style.transform = 'scale(1) translateY(0)';
+                    targetPage.style.filter = 'blur(0)';
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+
+                router.isTransitioning = false;
+            },
+            initialize: () => {
+                window.addEventListener('hashchange', router.load);
+                router.load();
+            }
+        };
+
+        // --- SKY EFFECTS ---
+        function initSky() {
+            const container = document.getElementById('stars-bg');
+            const nightEffects = document.getElementById('night-effects');
+            
+            for (let i = 0; i < 80; i++) {
+                const star = document.createElement('div');
+                star.className = 'static-star';
+                star.style.left = Math.random() * 100 + '%';
+                star.style.top = Math.random() * 100 + '%';
+                star.style.width = star.style.height = (Math.random() * 1.5 + 0.5) + 'px';
+                star.style.animationDelay = Math.random() * 8 + 's';
+                container.appendChild(star);
+            }
+
+            setInterval(() => {
+                const sStar = document.createElement('div');
+                sStar.className = 'shooting-star';
+                sStar.style.top = Math.random() * 30 + '%';
+                sStar.style.left = (Math.random() * 50 + 50) + '%';
+                sStar.innerHTML = `<div class="star-head"></div><div class="star-tail"></div>`;
+                nightEffects.appendChild(sStar);
+                setTimeout(() => sStar.remove(), 4000);
+            }, 6000);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            onAuthStateChanged(auth, (user) => {
+                if (!user) signInAnonymously(auth);
+                router.initialize();
+            });
+            initSky();
+
+            document.getElementById('form-login')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('login-email').value.trim();
+                const pass = document.getElementById('login-password').value;
+                
+                toggleLoading('login', true, "Kontrol Ediliyor...");
+                await new Promise(r => setTimeout(r, 2000));
+                
+                const docSnap = await getDoc(doc(db, "users", email.toLowerCase()));
+                if (docSnap.exists() && docSnap.data().password === pass) {
+                    currentUserEmail = email;
+                    window.location.hash = '#/home';
+                } else { 
+                    showStatus("Erişim reddedildi.", "error"); 
+                }
+                toggleLoading('login', false);
+            });
+
+            document.getElementById('form-register')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const user = document.getElementById('reg-user').value.trim();
+                const email = document.getElementById('reg-email').value.trim();
+                const pass = document.getElementById('reg-pass').value;
+                toggleLoading('register', true, "Kaydediliyor...");
+                
+                const userRef = doc(db, "users", email.toLowerCase());
+                const docSnap = await getDoc(userRef);
+                if (docSnap.exists()) {
+                    showStatus("E-posta zaten kayıtlı.", "error");
+                } else {
+                    await setDoc(userRef, { username: user, email: email.toLowerCase(), password: pass });
+                    showStatus("Kayıt başarılı.", "success");
+                    setTimeout(() => window.location.hash = '#/login', 1500);
+                }
+                toggleLoading('register', false);
+            });
+
+            document.getElementById('other-options-trigger')?.addEventListener('click', () => {
+                document.getElementById('passkey-panel').classList.toggle('hidden');
+            });
+
+            document.getElementById('btn-passkey-login')?.addEventListener('click', handlePasskeyLogin);
+            document.getElementById('btn-register-passkey')?.addEventListener('click', registerPasskey);
+        });
+
+        function toggleLoading(type, isLoading, text = "") {
+            const container = document.getElementById(`${type}-loading`);
+            const form = document.getElementById(`form-${type}`);
+            const loadingText = document.getElementById(`${type}-loading-text`);
+            
+            if (isLoading) {
+                form.classList.add('hidden');
+                container.classList.remove('hidden');
+                if (loadingText) loadingText.textContent = text;
+            } else {
+                form.classList.remove('hidden');
+                container.classList.add('hidden');
+            }
+        }
+    </script>
+
+    <style>
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background: #000; 
+            color: white; 
+            margin: 0; 
+            height: 100vh; 
+            width: 100vw;
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            overflow: hidden; 
+        }
+        
+        #bg-container { 
+            position: fixed; 
+            inset: 0; 
+            background: radial-gradient(circle at 50% 50%, #050a1a 0%, #000 100%); 
+            z-index: -10; 
+        }
+
+        .static-star { position: absolute; background: white; border-radius: 50%; opacity: 0.15; animation: twinkle 8s infinite ease-in-out; }
+        @keyframes twinkle { 0%, 100% { opacity: 0.1; } 50% { opacity: 0.5; } }
+
+        .shooting-star { position: absolute; transform: rotate(-45deg); pointer-events: none; opacity: 0; z-index: -5; }
+        .star-head { width: 6px; height: 6px; background: white; border-radius: 50%; box-shadow: 0 0 15px 5px rgba(255, 255, 255, 0.4); }
+        .star-tail { width: 180px; height: 2px; background: linear-gradient(90deg, rgba(255,255,255,0.7), transparent); transform: translateY(-4px); margin-left: 2px; }
+        .shooting-star { animation: shoot 3.5s cubic-bezier(0.1, 0, 0, 1) forwards; }
+        @keyframes shoot {
+            0% { transform: translate(0, 0) rotate(-45deg); opacity: 0; }
+            10% { opacity: 1; }
+            100% { transform: translate(-1000px, 1000px) rotate(-45deg); opacity: 0; }
+        }
+
+        .page-content {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow-y: auto;
+            padding: 40px 20px;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Glassmorphism Refinement */
+        .glass-card { 
+            backdrop-filter: blur(50px) saturate(200%); 
+            -webkit-backdrop-filter: blur(50px) saturate(200%);
+            background: rgba(2, 122, 255, 0.22); 
+            border: 1px solid rgba(255, 255, 255, 0.2); 
+            border-radius: 40px; 
+            padding: 3.5rem 2.5rem; 
+            width: 100%; 
+            max-width: 440px; 
+            box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8), inset 0 0 40px rgba(2, 122, 255, 0.15);
+            margin: auto;
+            text-align: center;
+        }
+
+        .logo-img { 
+            width: 80px; 
+            filter: invert(1); 
+            opacity: 0.5; 
+            margin: 0 auto 2rem auto; 
+            display: block;
+        }
+
+        .site-title {
+            font-weight: 900;
+            font-size: 2.4rem; /* Scaled down for better fit */
+            letter-spacing: -2px;
+            color: #fff;
+            margin-bottom: 2.5rem;
+            width: 100%;
+            text-align: center;
+            opacity: 1;
+            text-shadow: 0 0 25px rgba(2, 122, 255, 0.4);
+        }
+
+        .input-field { 
+            width: 100%; 
+            background: rgba(255, 255, 255, 0.08); 
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+            padding: 16px 22px; /* Smaller padding */
+            border-radius: 20px; 
+            color: white; 
+            margin-bottom: 16px; 
+            outline: none; 
+            transition: 0.4s; 
+            font-size: 0.95rem;
+        }
+        .input-field:focus { border-color: #027aff; background: rgba(255, 255, 255, 0.12); box-shadow: 0 0 25px rgba(2, 122, 255, 0.15); }
+
+        .btn-primary { 
+            width: 100%; 
+            background: #fff; 
+            color: #000; 
+            font-weight: 800; 
+            padding: 16px; /* Smaller padding */
+            border-radius: 20px; 
+            cursor: pointer; 
+            border: none; 
+            transition: 0.6s cubic-bezier(0.16, 1, 0.3, 1); 
+            text-transform: uppercase; 
+            font-size: 0.85rem;
+            letter-spacing: 2px;
+        }
+        .btn-primary:hover { transform: translateY(-3px) scale(1.01); box-shadow: 0 20px 40px rgba(2, 122, 255, 0.3); }
+
+        /* Apple Style Circular Spinner */
+        .apple-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3.5px solid rgba(255, 255, 255, 0.1);
+            border-top: 3.5px solid #fff;
+            border-radius: 50%;
+            animation: spin 0.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+            margin: 0 auto 18px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .btn-passkey { 
+            width: 100%; 
+            background: rgba(255, 255, 255, 0.08); 
+            border: 1px solid rgba(255, 255, 255, 0.12); 
+            color: white; 
+            padding: 14px; 
+            border-radius: 20px; 
+            font-weight: 700; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 12px; 
+            cursor: pointer;
+            transition: 0.3s;
+            font-size: 0.85rem;
+        }
+        .btn-passkey:hover { background: rgba(255, 255, 255, 0.15); border-color: #027aff; }
+
+        /* Home Page Refinements */
+        .divider { display: flex; flex-direction: column; align-items: center; margin: 35px 0; gap: 12px; }
+        .divider-line { width: 100%; height: 3px; background: rgba(255, 255, 255, 0.6); border-radius: 4px; }
+        .divider-text { font-[900] text-[10px] uppercase tracking-[4px] opacity-70; }
+
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="bg-container"></div>
+    <div id="stars-bg" style="position: fixed; inset: 0; pointer-events: none;"></div>
+    <div id="night-effects" style="position: fixed; inset: 0; pointer-events: none;"></div>
+
+    <!-- Alert System -->
+    <div id="custom-status" class="hidden opacity-0">
+        <span id="status-message"></span>
+    </div>
+
+    <!-- Login Page -->
+    <div id="page-login" class="page-content hidden">
+        <div class="glass-card">
+            <img src="sonlogo.png" alt="Logo" class="logo-img">
+            <h1 class="site-title">hizliyim.com</h1>
+            
+            <div id="login-loading" class="hidden">
+                <div class="apple-spinner"></div>
+                <p id="login-loading-text" class="text-[10px] font-bold uppercase tracking-[2px] opacity-60">Kontrol Ediliyor...</p>
+            </div>
+
+            <form id="form-login">
+                <input type="email" id="login-email" placeholder="E-posta" class="input-field" required>
+                <input type="password" id="login-password" placeholder="Erişim Şifresi" class="input-field" required>
+                <button type="submit" class="btn-primary">Giriş</button>
+                
+                <div class="flex items-center gap-4 my-6 opacity-20">
+                    <div class="flex-1 h-[1px] bg-white"></div>
+                    <button type="button" id="other-options-trigger" class="text-[9px] font-black uppercase tracking-[2px]">Alternatif</button>
+                    <div class="flex-1 h-[1px] bg-white"></div>
+                </div>
+
+                <div id="passkey-panel" class="hidden">
+                    <button type="button" id="btn-passkey-login" class="btn-passkey">
+                        <svg width="20" height="20" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 11c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zM3 21v-2a4 4 0 014-4h10a4 4 0 014 4v2"></path></svg>
+                        Passkey Doğrula
+                    </button>
+                </div>
+            </form>
+            
+            <div class="mt-12 text-[12px] text-center opacity-30">
+                Yetki tanımlanmadı mı? <a href="#/register" class="font-bold underline text-white opacity-100">Yeni Üyelik</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Register Page -->
+    <div id="page-register" class="page-content hidden">
+        <div class="glass-card">
+            <h1 class="text-2xl font-black mb-1">KAYIT PROTOKOLÜ</h1>
+            <p class="text-[10px] opacity-40 uppercase tracking-[5px] mb-12">Security Enrollment</p>
+            
+            <div id="register-loading" class="hidden">
+                <div class="apple-spinner"></div>
+                <p id="register-loading-text" class="text-[10px] font-bold uppercase tracking-[2px] opacity-60">Kaydediliyor...</p>
+            </div>
+
+            <form id="form-register">
+                <input type="text" id="reg-user" placeholder="Ad Soyad" class="input-field" required>
+                <input type="email" id="reg-email" placeholder="E-posta" class="input-field" required>
+                <input type="password" id="reg-pass" placeholder="Güvenli Parola" class="input-field" required>
+                <button type="submit" class="btn-primary mt-6">Kaydı Onayla</button>
+            </form>
+            
+            <div class="mt-10 text-[12px] text-center opacity-30">
+                <a href="#/login" class="font-bold underline text-white opacity-100">Vazgeç</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Home Page -->
+    <div id="page-home" class="page-content hidden">
+        <div class="glass-card">
+            <div class="flex justify-center mb-8">
+                <div class="p-6 bg-[#027aff]/25 rounded-[2rem] shadow-[0_0_30px_rgba(2,122,255,0.3)]">
+                    <svg width="48" height="48" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                </div>
+            </div>
+            
+            <h1 class="text-2xl font-extrabold mb-3">Yetki Bekleniyor</h1>
+            <p class="text-[14px] opacity-60 mb-8 leading-relaxed">Güvenlik kontrolü devam ediyor. Lütfen bekleyiniz.</p>
+            
+            <div class="apple-spinner border-[#027aff]/30 !border-t-[#027aff]"></div>
+
+            <div class="divider">
+                <div class="divider-line"></div>
+                <span class="divider-text">Yetkili İşlemler</span>
+            </div>
+            
+            <div class="space-y-6">
+                <button id="btn-register-passkey" class="btn-passkey !bg-[#027aff]/20 !border-[#027aff]/40">
+                    <svg width="22" height="22" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                    Biyometrik Erişim Kaydı
+                </button>
+            </div>
+
+            <button onclick="window.location.hash='#/login'; window.location.reload();" class="mt-16 text-[10px] font-black text-red-500/50 uppercase tracking-[4px] hover:text-red-500 transition-all duration-700">
+                Çıkış Yap
+            </button>
+        </div>
+    </div>
+</body>
+</html>
