@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>hizliyim.com - HizliSystems</title>
+    
+    <link rel="icon" type="image/png" href="sonlogo.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&display=swap" rel="stylesheet">
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        const myFirebaseConfig = {
+            apiKey: "AIzaSyCP0Rd8CAfzYRPtakfdQWBqS5uBn045XpE",
+            authDomain: "hizliyimforum.firebaseapp.com",
+            databaseURL: "https://hizliyimforum-default-rtdb.firebaseio.com",
+            projectId: "hizliyimforum",
+            storageBucket: "hizliyimforum.firebasestorage.app",
+            messagingSenderId: "903963422468",
+            appId: "1:903963422468:web:936c368393585efd0cea51"
+        };
+
+        let db, auth, userId, currentUserEmail;
+
+        try {
+            const app = initializeApp(myFirebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch (e) { console.error(e); }
+
+        // --- YEREL PASSKEY KAYIT (TELEFON KİLİDİNİ TETİKLER) ---
+        async function registerPasskey() {
+            if (!currentUserEmail) {
+                alert("Lütfen önce giriş yap balımmmm.");
+                return;
+            }
+            try {
+                const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+                const createCredentialOptions = {
+                    publicKey: {
+                        challenge,
+                        rp: { name: "hizliyim.com", id: window.location.hostname },
+                        user: {
+                            id: Uint8Array.from(currentUserEmail, c => c.charCodeAt(0)),
+                            name: currentUserEmail,
+                            displayName: currentUserEmail
+                        },
+                        pubKeyCredParams: [{ alg: -7, type: "public-key" }],
+                        authenticatorSelection: { 
+                            authenticatorAttachment: "platform", // BU KISIM ÖNEMLİ: Google yerine telefonu zorlar
+                            userVerification: "required" 
+                        },
+                        timeout: 60000
+                    }
+                };
+
+                const credential = await navigator.credentials.create(createCredentialOptions);
+                if (credential) {
+                    const userRef = doc(db, "users", currentUserEmail.toLowerCase());
+                    await updateDoc(userRef, { hasPasskey: true });
+                    alert("Harika! Bu cihazın ekran kilidi artık senin anahtarın oldu alicimmmm.");
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Cihaz kaydı yapılamadı. Tarayıcı ayarlarını kontrol et balım.");
+            }
+        }
+
+        // --- YEREL PASSKEY GİRİŞ ---
+        async function handlePasskeyLogin() {
+            if (!window.PublicKeyCredential) {
+                showError('login', "Cihazın desteklemiyor.");
+                return;
+            }
+
+            toggleLoading('login', true);
+            try {
+                const challenge = window.crypto.getRandomValues(new Uint8Array(32));
+                const credential = await navigator.credentials.get({
+                    publicKey: {
+                        challenge,
+                        timeout: 60000,
+                        userVerification: "required"
+                    }
+                });
+
+                if (credential) {
+                    // Simülasyon: Başarılı giriş
+                    window.location.hash = '#/home';
+                }
+            } catch (err) {
+                showError('login', "Doğrulama iptal edildi balım.");
+            } finally {
+                toggleLoading('login', false);
+            }
+        }
+
+        // --- ROUTER VE SAYFA YÖNETİMİ ---
+        const router = {
+            routes: { '#/login': 'login', '#/register': 'register', '#/home': 'home' },
+            load: () => {
+                const hash = window.location.hash || '#/login';
+                const page = router.routes[hash] || 'login';
+                
+                document.querySelectorAll('.page-content').forEach(el => el.classList.add('hidden'));
+                const currentPage = document.getElementById(`page-${page}`);
+                if (currentPage) {
+                    currentPage.classList.remove('hidden');
+                    currentPage.classList.add('animate-pop-in');
+                }
+            },
+            initialize: () => {
+                window.addEventListener('hashchange', router.load);
+                router.load();
+            }
+        };
+        window.router = router;
+
+        // --- FIREBASE İŞLEMLERİ ---
+        async function saveRegistrationData(username, email, password) {
+            const userRef = doc(db, "users", email.toLowerCase());
+            try {
+                const docSnap = await getDoc(userRef);
+                if (docSnap.exists()) return { success: false, message: "E-mail zaten kayıtlı balım." };
+                await setDoc(userRef, { username, email: email.toLowerCase(), password, createdAt: new Date().toISOString() });
+                return { success: true };
+            } catch (e) { return { success: false, message: "Hata oluştu." }; }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            onAuthStateChanged(auth, (user) => {
+                if (!user) signInAnonymously(auth);
+                router.initialize();
+            });
+            checkTimeAndApplyTheme();
+
+            // Login Form
+            document.getElementById('form-login')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const email = document.getElementById('login-email').value.trim();
+                const pass = document.getElementById('login-password').value;
+                toggleLoading('login', true);
+                const docSnap = await getDoc(doc(db, "users", email.toLowerCase()));
+                if (docSnap.exists() && docSnap.data().password === pass) {
+                    currentUserEmail = email;
+                    window.location.hash = '#/home';
+                } else {
+                    showError('login', "Hatalı giriş balım.");
+                }
+                toggleLoading('login', false);
+            });
+
+            // Register Form
+            document.getElementById('form-register')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const user = document.getElementById('reg-user').value;
+                const email = document.getElementById('reg-email').value;
+                const pass = document.getElementById('reg-pass').value;
+                toggleLoading('register', true);
+                const res = await saveRegistrationData(user, email, pass);
+                if (res.success) {
+                    alert("Kayıt başarılı! Şimdi giriş yapabilirsin balımmmm.");
+                    window.location.hash = '#/login';
+                } else {
+                    showError('register', res.message);
+                }
+                toggleLoading('register', false);
+            });
+
+            document.getElementById('other-options-trigger')?.addEventListener('click', () => {
+                document.getElementById('passkey-panel').classList.toggle('hidden');
+            });
+
+            document.getElementById('btn-passkey-login')?.addEventListener('click', handlePasskeyLogin);
+            document.getElementById('btn-register-passkey')?.addEventListener('click', registerPasskey);
+        });
+
+        function toggleLoading(type, isLoading) {
+            document.getElementById(`${type}-loading`)?.classList.toggle('hidden', !isLoading);
+        }
+
+        function showError(type, message) {
+            const err = document.getElementById(`${type}-error`);
+            if (err) {
+                err.textContent = message;
+                err.classList.remove('hidden');
+                setTimeout(() => err.classList.add('hidden'), 3000);
+            }
+        }
+
+        function checkTimeAndApplyTheme() {
+            const isNight = new Date().getHours() < 6 || new Date().getHours() >= 20;
+            document.body.className = isNight ? 'night-mode' : 'day-mode';
+        }
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; margin: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; height: 100vh; transition: 1s; }
+        body.day-mode { background: linear-gradient(135deg, #001f3f, #027aff, #001233); }
+        body.night-mode { background: #000; }
+        
+        .glass-panel { backdrop-filter: blur(25px); background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); border-radius: 35px; padding: 2.5rem; width: 92%; max-width: 400px; box-shadow: 0 25px 60px rgba(0,0,0,0.6); color: white; text-align: center; }
+        
+        .custom-input { width: 100%; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1); padding: 14px 20px; border-radius: 18px; color: white; margin-bottom: 12px; outline: none; transition: 0.3s; font-size: 0.9rem; }
+        .custom-input:focus { border-color: #027aff; background: rgba(0,0,0,0.4); box-shadow: 0 0 15px rgba(2, 122, 255, 0.2); }
+        
+        .action-btn { width: 100%; background: white; color: #027aff; font-weight: 800; padding: 15px; border-radius: 18px; cursor: pointer; border: none; transition: 0.3s; letter-spacing: 0.5px; }
+        .action-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0,0,0,0.3); }
+        
+        .passkey-btn { width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 12px; border-radius: 18px; cursor: pointer; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; }
+        .passkey-btn:hover { background: rgba(255,255,255,0.15); }
+
+        .divider { display: flex; align-items: center; margin: 20px 0; gap: 10px; opacity: 0.4; font-size: 9px; font-weight: 900; text-transform: uppercase; letter-spacing: 2px; }
+        .divider-line { flex: 1; height: 1px; background: white; }
+
+        .animate-pop-in { animation: popIn 0.5s cubic-bezier(0.17, 0.67, 0.83, 0.67) forwards; }
+        @keyframes popIn { from { opacity: 0; transform: translateY(20px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        
+        .neon-logo { width: 75px; filter: invert(1) drop-shadow(0 0 12px rgba(2, 122, 255, 0.8)); margin-bottom: 1rem; animation: pulse 3s infinite; }
+        @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    </style>
+</head>
+<body>
+    <!-- Login Sayfası -->
+    <div id="page-login" class="page-content hidden w-full flex justify-center">
+        <div class="glass-panel">
+            <img src="sonlogo.png" alt="Logo" class="neon-logo mx-auto">
+            <h1 class="text-3xl font-black mb-6 italic tracking-tighter">hizliyim.com</h1>
+            
+            <div id="login-error" class="bg-red-500/20 border border-red-500 text-red-200 p-3 rounded-xl mb-4 hidden text-xs"></div>
+            <div id="login-loading" class="hidden mb-4 animate-bounce text-[10px] uppercase font-bold opacity-60">Sistem Bağlanıyor...</div>
+
+            <form id="form-login">
+                <input type="email" id="login-email" placeholder="E-mail Adresi" class="custom-input" required>
+                <input type="password" id="login-password" placeholder="Şifre" class="custom-input" required>
+                <button type="submit" class="action-btn">Giriş Yap</button>
+            </form>
+
+            <div class="divider">
+                <div class="divider-line"></div>
+                <button id="other-options-trigger">Other</button>
+                <div class="divider-line"></div>
+            </div>
+
+            <div id="passkey-panel" class="hidden">
+                <button id="btn-passkey-login" class="passkey-btn">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 11c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zM3 21v-2a4 4 0 014-4h10a4 4 0 014 4v2"></path></svg>
+                    Biyometrik Hızlı Giriş
+                </button>
+            </div>
+            
+            <div class="mt-6 text-xs opacity-60">Hesabın yok mu? <a href="#/register" class="font-bold underline text-white">Kayıt Ol</a></div>
+        </div>
+    </div>
+
+    <!-- Kayıt Sayfası -->
+    <div id="page-register" class="page-content hidden w-full flex justify-center">
+        <div class="glass-panel">
+            <img src="sonlogo.png" alt="Logo" class="neon-logo mx-auto" style="width: 60px;">
+            <h1 class="text-2xl font-black mb-6">Yeni Üyelik</h1>
+            
+            <div id="register-error" class="bg-red-500/20 border border-red-500 text-red-200 p-3 rounded-xl mb-4 hidden text-xs"></div>
+            <div id="register-loading" class="hidden mb-4 animate-pulse text-[10px] uppercase font-bold">Kaydediliyor...</div>
+
+            <form id="form-register">
+                <input type="text" id="reg-user" placeholder="Kullanıcı Adı" class="custom-input" required>
+                <input type="email" id="reg-email" placeholder="E-mail Adresi" class="custom-input" required>
+                <input type="password" id="reg-pass" placeholder="Şifre" class="custom-input" required>
+                <button type="submit" class="action-btn">Kayıt Ol ve İlerle</button>
+            </form>
+            
+            <div class="mt-6 text-xs opacity-60">Zaten üye misin? <a href="#/login" class="font-bold underline text-white">Giriş Yap</a></div>
+        </div>
+    </div>
+
+    <!-- Home Sayfası -->
+    <div id="page-home" class="page-content hidden w-full flex justify-center">
+        <div class="glass-panel">
+            <h1 class="text-2xl font-bold mb-2">Hoşgeldin Balım!</h1>
+            <p class="text-sm opacity-70 mb-8">Hızlıyım Sistemleri'ne dahil oldun.</p>
+            
+            <div class="bg-white/5 border border-white/10 p-5 rounded-2xl mb-6">
+                <p class="text-[10px] uppercase tracking-widest font-black mb-4 opacity-50 text-left">Cihaz Güvenliği</p>
+                <button id="btn-register-passkey" class="passkey-btn !mt-0 !bg-blue-600/30 !border-blue-500/40">
+                    Ekran Kilidini Anahtar Yap
+                </button>
+                <p class="text-[9px] mt-3 opacity-40 leading-relaxed text-left">
+                    Bu butona basarak parmak izinizi veya yüzünüzü bu siteye tanıtın. Bir sonraki girişte şifre yazmadan sadece ekran kilidini açarak girebilirsiniz.
+                </p>
+            </div>
+
+            <button onclick="location.hash='#/login'; location.reload();" class="action-btn !bg-red-500/80 !text-white">Güvenli Çıkış</button>
+        </div>
+    </div>
+</body>
+</html>
+
